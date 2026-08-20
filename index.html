@@ -1,1 +1,427 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>𓃥 白六霓虹電漿燈</title>
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body, html {
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            background-color: #040407;
+            font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Noto Sans TC", "PingFang TC", "Microsoft JhengHei", sans-serif;
+            user-select: none;
+        }
 
+        #container {
+            position: relative;
+            width: 100vw;
+            height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+
+        #neon-svg {
+            position: absolute;
+            width: 100%;
+            height: 100%;
+            z-index: 1;
+            pointer-events: none;
+        }
+
+        /* 控制面板 */
+        #ui-panel {
+            position: absolute;
+            top: 15px;
+            left: 15px;
+            background: rgba(12, 12, 22, 0.92);
+            color: #00ffff;
+            padding: 14px 18px;
+            border-radius: 12px;
+            border: 1px solid rgba(0, 255, 255, 0.35);
+            box-shadow: 0 0 25px rgba(0, 255, 255, 0.25);
+            backdrop-filter: blur(12px);
+            z-index: 10;
+            width: 300px;
+            transition: all 0.3s ease;
+        }
+        #ui-header {
+            font-weight: bold;
+            font-size: 1rem;
+            cursor: pointer;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border-bottom: 1px solid rgba(0, 255, 255, 0.2);
+            padding-bottom: 8px;
+        }
+        .ui-group {
+            margin-top: 12px;
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+            font-size: 0.88rem;
+        }
+        .ui-group label { color: #aaa; }
+        .ui-group textarea, .ui-group input[type="range"] {
+            padding: 8px 12px;
+            background: #080810;
+            color: #00ffff;
+            border: 1px solid #00ffff;
+            border-radius: 6px;
+            outline: none;
+            font-size: 0.95rem;
+            font-family: inherit;
+            box-shadow: inset 0 0 8px rgba(0,255,255,0.25);
+        }
+        .ui-group textarea {
+            height: 65px;
+            resize: none;
+        }
+        #ui-body.collapsed { display: none; }
+    </style>
+</head>
+<body>
+
+    <div id="ui-panel">
+        <div id="ui-header" onclick="toggleUI()">
+            <span>⚡ 𓃥 白六霓虹電漿燈</span>
+            <span id="collapse-icon">▼</span>
+        </div>
+        <div id="ui-body" class="collapsed">
+            <div class="ui-group">
+                <label>輸入訊息字串：</label>
+                <textarea id="text-input" oninput="renderText()">白六霓虹&#10;電漿燈管</textarea>
+            </div>
+            <div class="ui-group">
+                <label>霓虹發光亮度：<span id="brightness-val">100%</span></label>
+                <input type="range" id="brightness-slider" min="20" max="250" value="100" oninput="updateBrightness()">
+            </div>
+            <div class="ui-group">
+                <label>電漿遊走段數：<span id="pulses-val">2</span></label>
+                <input type="range" id="pulses-slider" min="1" max="15" value="2" oninput="updatePulsesLabel()">
+            </div>
+        </div>
+    </div>
+
+    <div id="container">
+        <svg id="neon-svg" xmlns="http://www.w3.org/2000/svg">
+            <defs>
+                <filter id="neon-glow-main" x="-50%" y="-50%" width="200%" height="200%">
+                    <feGaussianBlur id="blur-elem" stdDeviation="5" result="coloredBlur1"/>
+                    <feGaussianBlur stdDeviation="2" result="coloredBlur2"/>
+                    <feMerge>
+                        <feMergeNode in="coloredBlur1"/>
+                        <feMergeNode in="coloredBlur2"/>
+                        <feMergeNode in="SourceGraphic"/>
+                    </feMerge>
+                </filter>
+                
+                <filter id="plasma-glow" x="-50%" y="-50%" width="200%" height="200%">
+                    <feGaussianBlur stdDeviation="6" result="blur1"/>
+                    <feGaussianBlur stdDeviation="2" result="blur2"/>
+                    <feMerge>
+                        <feMergeNode in="blur1"/>
+                        <feMergeNode in="SourceGraphic"/>
+                    </feMerge>
+                </filter>
+            </defs>
+            <g id="dark-shadow-group"></g>
+            <g id="base-tube-group"></g>
+            <g id="plasma-flow-group"></g>
+            <g id="glass-core-group"></g>
+        </svg>
+    </div>
+
+    <script>
+        const darkGroup = document.getElementById('dark-shadow-group');
+        const tubeGroup = document.getElementById('base-tube-group');
+        const plasmaGroup = document.getElementById('plasma-flow-group');
+        const glassCoreGroup = document.getElementById('glass-core-group');
+        
+        let activePulses = [];
+        let charNodesPool = []; 
+        let globalHue = 180;
+        let maxPulses = 2;
+
+        let audioCtx = null;
+        let humOsc = null;
+
+        function initAudio() {
+            if (audioCtx) return;
+            const AudioContext = window.AudioContext || window.webkitAudioContext;
+            audioCtx = new AudioContext();
+
+            humOsc = audioCtx.createOscillator();
+            const humGain = audioCtx.createGain();
+            humOsc.type = 'sawtooth';
+            humOsc.frequency.setValueAtTime(60, audioCtx.currentTime);
+            humGain.gain.setValueAtTime(0.012, audioCtx.currentTime);
+
+            const filter = audioCtx.createBiquadFilter();
+            filter.type = 'lowpass';
+            filter.frequency.value = 120;
+
+            humOsc.connect(filter);
+            filter.connect(humGain);
+            humGain.connect(audioCtx.destination);
+            humOsc.start();
+        }
+
+        function playSparkSound() {
+            if (!audioCtx) return;
+            const osc = audioCtx.createOscillator();
+            const gain = audioCtx.createGain();
+            osc.type = 'square';
+            osc.frequency.setValueAtTime(180 + Math.random() * 500, audioCtx.currentTime);
+            gain.gain.setValueAtTime(0.02, audioCtx.currentTime);
+            gain.gain.exponentialRampToValueAtTime(0.0001, audioCtx.currentTime + 0.08);
+            osc.connect(gain);
+            gain.connect(audioCtx.destination);
+            osc.start();
+            osc.stop(audioCtx.currentTime + 0.08);
+        }
+
+        function toggleUI() {
+            const body = document.getElementById('ui-body');
+            const icon = document.getElementById('collapse-icon');
+            body.classList.toggle('collapsed');
+            icon.innerText = body.classList.contains('collapsed') ? '▼' : '▲';
+        }
+
+        function updateBrightness() {
+            const val = document.getElementById('brightness-slider').value;
+            document.getElementById('brightness-val').innerText = `${val}%`;
+            const mult = val / 100;
+            document.getElementById('blur-elem').setAttribute('stdDeviation', 5 * mult);
+        }
+
+        function updatePulsesLabel() {
+            const val = parseInt(document.getElementById('pulses-slider').value, 10);
+            document.getElementById('pulses-val').innerText = val;
+            maxPulses = val;
+
+            while (activePulses.length > maxPulses) {
+                const removed = activePulses.pop();
+                if (removed && removed.element && removed.element.parentNode) {
+                    plasmaGroup.removeChild(removed.element);
+                }
+            }
+        }
+
+        function splitTextBalanced(text, maxChars) {
+            if (text.includes('\n')) return text.split('\n').filter(l => l.length > 0);
+            if (text.length <= maxChars) return [text];
+            const linesCount = Math.ceil(text.length / maxChars);
+            const lines = [];
+            const baseLen = Math.floor(text.length / linesCount);
+            let rem = text.length % linesCount;
+            let idx = 0;
+            for (let i = 0; i < linesCount; i++) {
+                let len = baseLen + (rem > 0 ? 1 : 0);
+                if (rem > 0) rem--;
+                lines.push(text.substr(idx, len));
+                idx += len;
+            }
+            return lines;
+        }
+
+        function renderText() {
+            const text = document.getElementById('text-input').value.trim() || "NEON";
+            const w = window.innerWidth;
+            const h = window.innerHeight;
+
+            darkGroup.innerHTML = '';
+            tubeGroup.innerHTML = '';
+            plasmaGroup.innerHTML = '';
+            glassCoreGroup.innerHTML = '';
+            charNodesPool = [];
+            activePulses = [];
+
+            const isPortrait = h > w;
+            const maxWidth = w * (isPortrait ? 0.88 : 0.82);
+            const maxHeight = h * 0.8;
+
+            let fontSize = Math.floor(isPortrait ? w * 0.28 : h * 0.28);
+            let lines = splitTextBalanced(text, Math.max(1, Math.floor(maxWidth / fontSize)));
+
+            const offCanvas = document.createElement('canvas');
+            const offCtx = offCanvas.getContext('2d');
+
+            while (fontSize > 16) {
+                offCtx.font = `900 ${fontSize}px system-ui, "Noto Sans TC", "PingFang TC", "Microsoft JhengHei", sans-serif`;
+                let fit = true;
+                for (let line of lines) {
+                    if (offCtx.measureText(line).width > maxWidth) { fit = false; break; }
+                }
+                if (fit && lines.length * fontSize * 1.25 <= maxHeight) break;
+                fontSize -= 2;
+            }
+
+            const lineHeight = fontSize * 1.25;
+            const startY = (h - (lines.length - 1) * lineHeight) / 2;
+            const tubeStrokeWidth = Math.max(4, fontSize * 0.055);
+
+            lines.forEach((line, lineIdx) => {
+                const lineY = startY + lineIdx * lineHeight;
+                offCtx.font = `900 ${fontSize}px system-ui, "Noto Sans TC", "PingFang TC", "Microsoft JhengHei", sans-serif`;
+                const totalLineWidth = offCtx.measureText(line).width;
+                let currentX = (w - totalLineWidth) / 2;
+
+                for (let i = 0; i < line.length; i++) {
+                    const char = line[i];
+                    const charWidth = offCtx.measureText(char).width;
+                    const charX = currentX + charWidth / 2;
+
+                    // 使用 SVG 向量文字（100% 精準字體，絕不出界）
+                    const createTextSVG = (strokeColor, strokeW, filterUrl = null) => {
+                        const node = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+                        node.setAttribute('x', charX);
+                        node.setAttribute('y', lineY);
+                        node.setAttribute('font-size', fontSize);
+                        node.setAttribute('font-family', 'system-ui, "Noto Sans TC", "PingFang TC", "Microsoft JhengHei", sans-serif');
+                        node.setAttribute('font-weight', '900');
+                        node.setAttribute('text-anchor', 'middle');
+                        node.setAttribute('dominant-baseline', 'central');
+                        node.setAttribute('fill', 'none');
+                        node.setAttribute('stroke', strokeColor);
+                        node.setAttribute('stroke-width', strokeW);
+                        node.setAttribute('stroke-linecap', 'round');
+                        node.setAttribute('stroke-linejoin', 'round');
+                        if (filterUrl) node.setAttribute('filter', filterUrl);
+                        node.textContent = char;
+                        return node;
+                    };
+
+                    // 1. 底層黑色擋光保護層
+                    darkGroup.appendChild(createTextSVG('#040407', tubeStrokeWidth + 6));
+
+                    // 2. 常亮霓虹玻璃管
+                    const tubeNode = createTextSVG('rgba(0,255,255,0.4)', tubeStrokeWidth, 'url(#neon-glow-main)');
+                    tubeGroup.appendChild(tubeNode);
+
+                    // 3. 頂層玻璃管心高光（防逸出第 3 層封印）
+                    glassCoreGroup.appendChild(createTextSVG('rgba(15, 25, 45, 0.85)', Math.max(1.5, tubeStrokeWidth * 0.3)));
+
+                    const pathLen = tubeNode.getComputedTextLength ? tubeNode.getComputedTextLength() : fontSize * 3;
+
+                    charNodesPool.push({
+                        char: char,
+                        x: charX,
+                        y: lineY,
+                        fontSize: fontSize,
+                        strokeWidth: tubeStrokeWidth,
+                        length: pathLen
+                    });
+
+                    currentX += charWidth;
+                }
+            });
+        }
+
+        // 嚴格在管壁內部進行動態電漿遊走
+        function spawnPlasmaPulse() {
+            if (charNodesPool.length === 0) return;
+
+            const target = charNodesPool[Math.floor(Math.random() * charNodesPool.length)];
+            const pulseLen = target.length * (0.18 + Math.random() * 0.22);
+
+            const plasmaNode = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+            plasmaNode.setAttribute('x', target.x);
+            plasmaNode.setAttribute('y', target.y);
+            plasmaNode.setAttribute('font-size', target.fontSize);
+            plasmaNode.setAttribute('font-family', 'system-ui, "Noto Sans TC", "PingFang TC", "Microsoft JhengHei", sans-serif');
+            plasmaNode.setAttribute('font-weight', '900');
+            plasmaNode.setAttribute('text-anchor', 'middle');
+            plasmaNode.setAttribute('dominant-baseline', 'central');
+            plasmaNode.setAttribute('fill', 'none');
+            plasmaNode.setAttribute('stroke-width', target.strokeWidth * 0.85); // 略窄於管徑，100% 被包裹在管內
+            plasmaNode.setAttribute('stroke-linecap', 'round');
+            plasmaNode.setAttribute('stroke-linejoin', 'round');
+            plasmaNode.setAttribute('filter', 'url(#plasma-glow)');
+            plasmaNode.setAttribute('stroke-dasharray', `${pulseLen} ${target.length * 2}`);
+            plasmaNode.setAttribute('opacity', '0');
+            plasmaNode.textContent = target.char;
+
+            plasmaGroup.appendChild(plasmaNode);
+
+            const dir = Math.random() < 0.5 ? 1 : -1;
+            const travelRange = target.length + pulseLen;
+
+            activePulses.push({
+                element: plasmaNode,
+                totalLength: target.length,
+                pulseLength: pulseLen,
+                offset: dir === 1 ? -pulseLen : target.length,
+                startOffset: dir === 1 ? -pulseLen : target.length,
+                dir: dir,
+                speed: 0.35 + Math.random() * 0.5,
+                hue: (globalHue + Math.random() * 60) % 360,
+                progress: 0,
+                travelRange: travelRange
+            });
+        }
+
+        function animate() {
+            globalHue = (globalHue + 0.6) % 360;
+            const brightnessMult = parseFloat(document.getElementById('brightness-slider').value) / 100;
+
+            const tubeNodes = tubeGroup.querySelectorAll('text');
+            tubeNodes.forEach(node => {
+                node.setAttribute('stroke', `hsl(${globalHue}, 100%, ${Math.min(100, 42 * brightnessMult)}%)`);
+            });
+
+            if (Math.random() < 0.06 && activePulses.length < maxPulses) {
+                spawnPlasmaPulse();
+            }
+
+            for (let i = activePulses.length - 1; i >= 0; i--) {
+                const pulse = activePulses[i];
+                pulse.offset += pulse.dir * pulse.speed;
+
+                const traveled = Math.abs(pulse.offset - pulse.startOffset);
+                pulse.progress = Math.min(1, traveled / pulse.travelRange);
+
+                // 平滑淡入淡出（前 22% 淡入，後 22% 淡出）
+                let alpha = 1;
+                if (pulse.progress < 0.22) {
+                    alpha = pulse.progress / 0.22;
+                } else if (pulse.progress > 0.78) {
+                    alpha = (1 - pulse.progress) / 0.22;
+                }
+                alpha = Math.max(0, Math.min(1, alpha));
+
+                pulse.element.setAttribute('stroke', `hsl(${pulse.hue}, 100%, ${Math.min(100, 90 * brightnessMult)}%)`);
+                pulse.element.setAttribute('stroke-dashoffset', -pulse.offset);
+                pulse.element.setAttribute('opacity', alpha.toFixed(3));
+
+                if (Math.random() < 0.005) playSparkSound();
+
+                if (pulse.progress >= 1) {
+                    plasmaGroup.removeChild(pulse.element);
+                    activePulses.splice(i, 1);
+                }
+            }
+
+            requestAnimationFrame(animate);
+        }
+
+        window.addEventListener('click', () => {
+            initAudio();
+            playSparkSound();
+        });
+
+        window.addEventListener('resize', renderText);
+
+        window.onload = () => {
+            renderText();
+            updateBrightness();
+            updatePulsesLabel();
+            animate();
+        };
+    </script>
+</body>
+</html>
